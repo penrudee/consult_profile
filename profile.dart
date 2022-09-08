@@ -1,19 +1,24 @@
 import 'dart:io';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+// import 'package:file_picker/file_picker.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 
 import 'package:image_picker/image_picker.dart';
 import 'package:learn_layout/locator.dart';
+// import 'package:learn_layout/repository/auth_repo.dart';
 
-import 'package:learn_layout/services/database_service.dart';
+// import 'package:learn_layout/services/database_service.dart';
+import 'package:learn_layout/widgets/snacbar_error.dart';
 import '../profile/avatar.dart';
 
 import 'package:learn_layout/utility/my_constant.dart';
 import 'package:learn_layout/view_controller/user_controller.dart';
 
 import '../models/user_models.dart';
-import '../services/cloud_storage_service.dart';
+// import '../services/cloud_storage_service.dart';
 
 class UserProfile extends StatefulWidget {
   const UserProfile({Key? key}) : super(key: key);
@@ -24,8 +29,11 @@ class UserProfile extends StatefulWidget {
 
 class _UserProfileState extends State<UserProfile> {
   UserModel _currentUser = locator.get<UserController>().currentUser;
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseStorage _sTorage =
+      FirebaseStorage.instanceFor(bucket: MyConstant.storageBucket);
 
-  DatabaseService? _db;
+  // DatabaseService? _db;
   bool statusRedEye = true;
   bool statusRedEyeConfirmPassWord = true;
   bool checkCurrentPasswordValid = true;
@@ -33,13 +41,14 @@ class _UserProfileState extends State<UserProfile> {
   TextEditingController passwordController = TextEditingController();
   TextEditingController confirmController = TextEditingController();
 
-  CloudStorageService? _cloudStorage; //1.0.0
+  // CloudStorageService? _cloudStorage; //1.0.0
 
   @override
   void initState() {
     super.initState();
+
     displayNameController =
-        TextEditingController(text: _currentUser.displayName);
+        TextEditingController(text: _auth.currentUser?.displayName);
 
     getavatarUrlFromFirebaseStoreage();
   }
@@ -47,6 +56,7 @@ class _UserProfileState extends State<UserProfile> {
   @override
   Widget build(BuildContext context) {
     double size = MediaQuery.of(context).size.width;
+    String displayName2;
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -123,16 +133,19 @@ class _UserProfileState extends State<UserProfile> {
                 child: ElevatedButton(
                   style: MyConstant().myButtonStyle(),
                   onPressed: () async {
-                    var userController = locator.get<UserController>();
+                    // var userController = locator.get<UserController>();
                     if (_currentUser.displayName !=
                         displayNameController.text) {
-                      var displayname = displayNameController.text;
-                      userController.updateDisplayName(displayname);
+                      displayName2 = displayNameController.text;
+                      await EditDisplayName(displayName2);
+                      Navigator.pop(context);
+                    } else {
+                      showWarningSnacbar(context, "Profile is updated");
                     }
                   },
                   child: Text(
-                    'Update Profile!',
-                    style: TextStyle(color: MyConstant.light),
+                    "Update User Profile",
+                    style: MyConstant().h3White(),
                   ),
                 ),
               ),
@@ -142,40 +155,85 @@ class _UserProfileState extends State<UserProfile> {
   }
 
   _picImageFromGallery() async {
+    final firebaseUser = _auth.currentUser;
+    final uid = firebaseUser?.uid;
+    final email = firebaseUser?.email;
+    final displayName = firebaseUser?.displayName;
+    final avatarUrl = firebaseUser?.photoURL;
+    print("user uid = $uid");
+    print("user email = $email");
+    print("user displayname = $displayName");
+    print("user avatarUrl = $avatarUrl");
+    print("**************************");
+    print("current user imageUrl = ${_auth.currentUser?.photoURL}");
     PickedFile? pickedFile =
         await ImagePicker.platform.pickImage(source: ImageSource.gallery);
 
-    var imagePath = pickedFile!.path;
+    var imagePath = pickedFile?.path;
 
-    File? imageFile = File(imagePath);
-    print("image File from profile.dart line 153 = $imageFile");
-    print("current user uid from profile.dart line 152 = ${_currentUser.uid}");
-    String? _imageURL = await _cloudStorage?.saveUserImageToStorage_FileType(
-        _currentUser.uid, imageFile);
-    print("image url from profile.dart line 157 = $_imageURL");
-    await _db?.editUser(
-        uid: _currentUser.uid,
-        email: _currentUser.email,
-        displayName: displayNameController.text,
-        avatarUrl: _imageURL);
+    File? imageFile = File(imagePath ?? MyConstant.backbutton);
+
+    print("imageFile =$imageFile");
+
+    String? _imageUrl = await saveAvatarUrlToStorage(uid, imageFile);
+
+    await EditProfileInFirebaseForeStore(
+      uid,
+      email,
+      displayName,
+      _imageUrl,
+    );
+
     setState(() {});
     getavatarUrlFromFirebaseStoreage();
   }
 
+  EditProfileInFirebaseForeStore(
+      String? uid, String? email, String? displayName, String? imageUrl) async {
+    await FirebaseFirestore.instance.collection("Users").doc(uid).update({
+      "email": email,
+      "displayName": displayName,
+      "avatarUrl": imageUrl,
+      "last_active": DateTime.now().toUtc(),
+    });
+    await _auth.currentUser?.updatePhotoURL(imageUrl);
+
+    print("save new profile");
+  }
+
+  EditDisplayName(
+    String? displayName,
+  ) async {
+    final firebaseUser = _auth.currentUser;
+    final uid = firebaseUser?.uid;
+    final email = firebaseUser?.email;
+
+    final avatarUrl = firebaseUser?.photoURL;
+    await FirebaseFirestore.instance.collection("Users").doc(uid).update({
+      // "email": email,
+      "displayName": displayName,
+      // "avatarUrl": avatarUrl,
+      "last_active": DateTime.now().toUtc(),
+    });
+    await _auth.currentUser?.updateDisplayName(displayName);
+    print("save new displayname");
+  }
+
   _pickImageFromCamera() async {
+    final firebaseUser = _auth.currentUser;
+    final uid = firebaseUser?.uid;
+    final email = firebaseUser?.email;
+    final displayName = firebaseUser?.displayName;
+    final avatarUrl = firebaseUser?.photoURL;
     PickedFile? pickedFile =
         // PlatformFile pickedFile=
         await ImagePicker.platform.pickImage(source: ImageSource.camera);
-    var imagePath = pickedFile!.path;
-    File imageFile = File(imagePath);
+    var imagePath = pickedFile?.path;
+    File imageFile = File(imagePath ?? MyConstant.bakamol);
 
-    String? _imageURL = await _cloudStorage?.saveUserImageToStorage_FileType(
-        _currentUser.uid!, imageFile);
-    await _db?.editUser(
-        uid: _currentUser.uid,
-        email: _currentUser.email,
-        displayName: displayNameController.text,
-        avatarUrl: _imageURL);
+    String? _imageURL = await saveAvatarUrlToStorage(uid!, imageFile);
+
+    await EditProfileInFirebaseForeStore(uid, email, displayName, _imageURL);
     setState(() {});
     getavatarUrlFromFirebaseStoreage();
   }
@@ -183,11 +241,44 @@ class _UserProfileState extends State<UserProfile> {
   String pickLinkAvatar = '';
   void getavatarUrlFromFirebaseStoreage() async {
     FirebaseStorage st = FirebaseStorage.instance;
-    Reference ref = st.ref().child("user/profile/${_currentUser.uid}");
+    Reference ref = st.ref().child("user/profile/${_auth.currentUser?.uid}");
     ref.getDownloadURL().then((value) async {
       setState(() {
         pickLinkAvatar = value;
       });
+    });
+  }
+
+  Future<String?> saveAvatarUrlToStorage(String? _uid, File _file) async {
+    try {
+      Reference _ref = _sTorage.ref().child('user/profile/$_uid');
+      await _ref.delete();
+      UploadTask _task = _ref.putFile(
+        _file,
+      );
+      var downloadUrl = await _task.then(
+        (_result) => _result.ref.getDownloadURL(),
+      );
+
+      String url = downloadUrl.toString();
+
+      print("****download url = $url*****");
+
+      return url;
+    } catch (e) {
+      print("Error from upload/download image = $e");
+    }
+  }
+
+  void gallaryImage() async {
+    File? imagePicked;
+    final picker = ImagePicker();
+    final pickedImage = await picker.pickImage(
+      source: ImageSource.gallery,
+    );
+    final pickedImageFile = File(pickedImage!.path);
+    setState(() {
+      imagePicked = pickedImageFile;
     });
   }
 }
